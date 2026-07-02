@@ -5,6 +5,28 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
+
+# For Windows PowerShell 5.1
+try {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+} catch {}
+
+function Normalize-DirPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    $trimChars = [char[]]@([char]92, [char]47)
+
+    try {
+        $expanded = [Environment]::ExpandEnvironmentVariables($Path)
+        return [System.IO.Path]::GetFullPath($expanded).TrimEnd($trimChars)
+    } catch {
+        return $Path.TrimEnd($trimChars)
+    }
+}
 
 function Add-ToUserPath {
     param(
@@ -12,153 +34,174 @@ function Add-ToUserPath {
         [string]$PathToAdd
     )
 
-    $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $normalizedPathToAdd = Normalize-DirPath -Path $PathToAdd
+    $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
 
-    $PathItems = @()
-    if ($UserPath) {
-        $PathItems = $UserPath -split ";" | Where-Object { $_ -and $_.Trim() }
-    }
+    $alreadyInPath = $false
 
-    $NormalizedPathToAdd = ([System.IO.DirectoryInfo]$PathToAdd).FullName.TrimEnd("\")
+    if (-not [string]::IsNullOrWhiteSpace($userPath)) {
+        $pathItems = $userPath -split ";"
 
-    $AlreadyInPath = $false
-
-    foreach ($Item in $PathItems) {
-        try {
-            $ExpandedItem = [Environment]::ExpandEnvironmentVariables($Item)
-            $NormalizedItem = ([System.IO.DirectoryInfo]$ExpandedItem).FullName.TrimEnd("\")
-
-            if ($NormalizedItem -ieq $NormalizedPathToAdd) {
-                $AlreadyInPath = $true
-                break
+        foreach ($item in $pathItems) {
+            if ([string]::IsNullOrWhiteSpace($item)) {
+                continue
             }
-        } catch {
-            if ($Item.TrimEnd("\") -ieq $PathToAdd.TrimEnd("\")) {
-                $AlreadyInPath = $true
+
+            $normalizedItem = Normalize-DirPath -Path $item
+
+            if ($normalizedItem -ieq $normalizedPathToAdd) {
+                $alreadyInPath = $true
                 break
             }
         }
     }
 
-    if (-not $AlreadyInPath) {
-        if ([string]::IsNullOrWhiteSpace($UserPath)) {
-            $NewUserPath = $PathToAdd
+    if (-not $alreadyInPath) {
+        if ([string]::IsNullOrWhiteSpace($userPath)) {
+            $newUserPath = $PathToAdd
         } else {
-            $NewUserPath = "$UserPath;$PathToAdd"
+            $newUserPath = $userPath + ";" + $PathToAdd
         }
 
-        [Environment]::SetEnvironmentVariable("Path", $NewUserPath, "User")
-        Write-Host "已添加到用户 Path: $PathToAdd"
+        [Environment]::SetEnvironmentVariable("Path", $newUserPath, "User")
+        Write-Host "Added to user PATH: $PathToAdd"
     } else {
-        Write-Host "用户 Path 中已存在该目录，无需重复添加。"
+        Write-Host "User PATH already contains install directory."
     }
 
-    $CurrentPathItems = $env:Path -split ";" | Where-Object { $_ -and $_.Trim() }
-    $CurrentAlreadyHas = $false
+    # Also update PATH for current PowerShell session
+    $currentAlreadyHas = $false
 
-    foreach ($Item in $CurrentPathItems) {
-        try {
-            $ExpandedItem = [Environment]::ExpandEnvironmentVariables($Item)
-            $NormalizedItem = ([System.IO.DirectoryInfo]$ExpandedItem).FullName.TrimEnd("\")
+    if (-not [string]::IsNullOrWhiteSpace($env:Path)) {
+        $currentItems = $env:Path -split ";"
 
-            if ($NormalizedItem -ieq $NormalizedPathToAdd) {
-                $CurrentAlreadyHas = $true
-                break
+        foreach ($item in $currentItems) {
+            if ([string]::IsNullOrWhiteSpace($item)) {
+                continue
             }
-        } catch {
-            if ($Item.TrimEnd("\") -ieq $PathToAdd.TrimEnd("\")) {
-                $CurrentAlreadyHas = $true
+
+            $normalizedItem = Normalize-DirPath -Path $item
+
+            if ($normalizedItem -ieq $normalizedPathToAdd) {
+                $currentAlreadyHas = $true
                 break
             }
         }
     }
 
-    if (-not $CurrentAlreadyHas) {
-        $env:Path += ";$PathToAdd"
+    if (-not $currentAlreadyHas) {
+        $env:Path = $env:Path + ";" + $PathToAdd
+    }
+}
+
+function Get-WindowsRuntimeId {
+    $arch = $env:PROCESSOR_ARCHITECTURE
+
+    if ($env:PROCESSOR_ARCHITEW6432) {
+        $arch = $env:PROCESSOR_ARCHITEW6432
+    }
+
+    switch ($arch.ToUpperInvariant()) {
+        "AMD64" { return "win-x64" }
+        "ARM64" { return "win-arm64" }
+        "X86" { return "win-NT6.0-x86" }
+        default {
+            throw "Unsupported architecture: $arch"
+        }
     }
 }
 
 $Repo = "nilaoda/N_m3u8DL-RE"
 $ApiUrl = "https://api.github.com/repos/$Repo/releases/latest"
 $ExeName = "N_m3u8DL-RE.exe"
-$VersionFileName = ".installed_version"
-
-Write-Host "安装目录: $InstallDir"
+$StateFileName = ".install-state.json"
 
 New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
 $InstallDir = (Resolve-Path $InstallDir).Path
 
-$VersionFile = Join-Path $InstallDir $VersionFileName
 $InstalledExe = Join-Path $InstallDir $ExeName
+$StateFile = Join-Path $InstallDir $StateFileName
 
-$Arch = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
+Write-Host "Install directory: $InstallDir"
 
-switch ($Arch) {
-    "X64"   { $AssetName = "win-x64.zip" }
-    "Arm64" { $AssetName = "win-arm64.zip" }
-    "X86"   { $AssetName = "win-NT6.0-x86.zip" }
-    default {
-        throw "不支持的系统架构: $Arch"
-    }
-}
-
-Write-Host "检测到架构: $Arch"
-Write-Host "匹配资产: $AssetName"
+$RuntimeId = Get-WindowsRuntimeId
+Write-Host "Runtime ID: $RuntimeId"
 
 $Headers = @{
     "User-Agent" = "PowerShell-N_m3u8DL-RE-Installer"
 }
 
-Write-Host "正在检查 GitHub 最新版本..."
+Write-Host "Checking latest release..."
 
 $Release = Invoke-RestMethod -Uri $ApiUrl -Headers $Headers
-$LatestVersion = $Release.tag_name
 
-if (-not $LatestVersion) {
-    throw "无法从 GitHub release 获取最新版本号。"
+if (-not $Release.tag_name) {
+    throw "Failed to get latest release tag."
 }
 
-$EscapedRid = [regex]::Escape($AssetRid)
+$LatestTag = $Release.tag_name
 
-$Asset = $Release.assets | Where-Object {
-    $_.name -match "_$EscapedRid" -and
-    $_.name -match "\.zip$"
-} | Sort-Object created_at -Descending | Select-Object -First 1
+$escapedRuntimeId = [regex]::Escape($RuntimeId)
+$assetPattern = "_" + $escapedRuntimeId + "(_\d+)?\.zip$"
+
+$Asset = $Release.assets |
+    Where-Object {
+        $_.name -match $assetPattern
+    } |
+    Sort-Object created_at -Descending |
+    Select-Object -First 1
 
 if (-not $Asset) {
-    $AvailableAssets = ($Release.assets | ForEach-Object { $_.name }) -join "`n - "
-    throw "没有找到匹配平台的资产: $AssetRid`n当前 release 可用资产:`n - $AvailableAssets"
+    $availableAssets = ($Release.assets | ForEach-Object { $_.name }) -join "`n - "
+    throw "No matching asset found for runtime ID: $RuntimeId`nAvailable assets:`n - $availableAssets"
 }
 
 $AssetName = $Asset.name
-Write-Host "匹配到资产: $AssetName"
+$AssetUrl = $Asset.browser_download_url
 
-$CurrentVersion = $null
+Write-Host "Latest tag: $LatestTag"
+Write-Host "Matched asset: $AssetName"
 
-if (Test-Path $VersionFile) {
-    $CurrentVersion = (Get-Content $VersionFile -Raw).Trim()
+$CurrentTag = $null
+$CurrentAsset = $null
+
+if (Test-Path $StateFile) {
+    try {
+        $state = Get-Content $StateFile -Raw | ConvertFrom-Json
+        $CurrentTag = $state.tag
+        $CurrentAsset = $state.asset
+    } catch {
+        $CurrentTag = $null
+        $CurrentAsset = $null
+    }
 }
 
-if (-not $CurrentVersion -and (Test-Path $InstalledExe)) {
-    $CurrentVersion = "未知版本"
+if (-not $CurrentTag -and (Test-Path $InstalledExe)) {
+    $CurrentTag = "unknown"
 }
 
-Write-Host "本地版本: $(if ($CurrentVersion) { $CurrentVersion } else { '未安装' })"
-Write-Host "最新版本: $LatestVersion"
+Write-Host "Current tag: $(if ($CurrentTag) { $CurrentTag } else { 'not installed' })"
+Write-Host "Current asset: $(if ($CurrentAsset) { $CurrentAsset } else { 'not installed' })"
+
+$isLatest = $false
+
+if (($CurrentTag -eq $LatestTag) -and ($CurrentAsset -eq $AssetName)) {
+    $isLatest = $true
+}
 
 if ($CheckOnly) {
-    if ($CurrentVersion -eq $LatestVersion) {
-        Write-Host "当前已经是最新版本。"
+    if ($isLatest) {
+        Write-Host "Already up to date."
     } else {
-        Write-Host "发现新版本，可以运行本脚本进行更新。"
+        Write-Host "Update available."
     }
 
     exit 0
 }
 
-if (($CurrentVersion -eq $LatestVersion) -and (-not $Force)) {
-    Write-Host "当前已经是最新版本，无需更新。"
-    Write-Host "如果想强制重装，请加参数: -Force"
+if ($isLatest -and (-not $Force)) {
+    Write-Host "Already up to date. No update needed."
+    Write-Host "Use -Force to reinstall latest version."
 
     Add-ToUserPath -PathToAdd $InstallDir
 
@@ -173,21 +216,27 @@ Remove-Item $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $ExtractDir -Force | Out-Null
 
 try {
-    Write-Host "正在下载: $($Asset.browser_download_url)"
-    Invoke-WebRequest -Uri $Asset.browser_download_url -OutFile $ZipPath -Headers $Headers
+    Write-Host "Downloading..."
+    Write-Host $AssetUrl
 
-    Write-Host "正在解压..."
+    Invoke-WebRequest -Uri $AssetUrl -OutFile $ZipPath -Headers $Headers
+
+    try {
+        Unblock-File -Path $ZipPath -ErrorAction SilentlyContinue
+    } catch {}
+
+    Write-Host "Extracting..."
     Expand-Archive -Path $ZipPath -DestinationPath $ExtractDir -Force
 
     $ExeFile = Get-ChildItem -Path $ExtractDir -Filter $ExeName -Recurse -File | Select-Object -First 1
 
     if (-not $ExeFile) {
-        throw "解压后没有找到 $ExeName"
+        throw "Executable not found after extraction: $ExeName"
     }
 
     $SourceDir = $ExeFile.Directory.FullName
 
-    Write-Host "程序文件目录: $SourceDir"
+    Write-Host "Source directory: $SourceDir"
 
     if (Test-Path $InstalledExe) {
         $BackupDir = Join-Path $InstallDir "_backup_previous"
@@ -195,37 +244,53 @@ try {
         Remove-Item $BackupDir -Recurse -Force -ErrorAction SilentlyContinue
         New-Item -ItemType Directory -Path $BackupDir -Force | Out-Null
 
-        Write-Host "正在备份当前版本到: $BackupDir"
+        Write-Host "Backing up previous version to: $BackupDir"
+
+        $scriptName = $null
+        if ($PSCommandPath) {
+            $scriptName = Split-Path $PSCommandPath -Leaf
+        }
 
         Get-ChildItem -Path $InstallDir -Force | Where-Object {
             $_.Name -ne "_backup_previous" -and
-            $_.Name -ne (Split-Path $PSCommandPath -Leaf)
+            $_.Name -ne $scriptName
         } | ForEach-Object {
             Copy-Item -Path $_.FullName -Destination $BackupDir -Recurse -Force
         }
     }
 
-    Write-Host "正在复制新版本文件..."
+    Write-Host "Copying files..."
 
     Copy-Item -Path (Join-Path $SourceDir "*") -Destination $InstallDir -Recurse -Force
 
     if (-not (Test-Path $InstalledExe)) {
-        throw "安装/更新失败，目标目录中没有找到 $ExeName"
+        throw "Install or update failed. Executable not found: $InstalledExe"
     }
 
-    $LatestVersion | Set-Content -Path $VersionFile -Encoding UTF8
+    try {
+        Unblock-File -Path (Join-Path $InstallDir "*") -ErrorAction SilentlyContinue
+    } catch {}
+
+    $newState = [PSCustomObject]@{
+        tag = $LatestTag
+        asset = $AssetName
+        installed_at = (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
+    }
+
+    $newState | ConvertTo-Json | Set-Content -Path $StateFile -Encoding ASCII
 
     Add-ToUserPath -PathToAdd $InstallDir
 
     Write-Host ""
-    Write-Host "完成。"
-    Write-Host "当前版本: $LatestVersion"
-    Write-Host "可执行文件: $InstalledExe"
+    Write-Host "Done."
+    Write-Host "Installed tag: $LatestTag"
+    Write-Host "Installed asset: $AssetName"
+    Write-Host "Executable: $InstalledExe"
     Write-Host ""
-    Write-Host "你可以运行下面命令测试:"
+    Write-Host "Test command:"
     Write-Host "N_m3u8DL-RE"
     Write-Host ""
-    Write-Host "如果新开的终端中仍无法识别，请重新打开 PowerShell / Windows Terminal。"
+    Write-Host "If command is not recognized in a new terminal, restart PowerShell or Windows Terminal."
 }
 finally {
     Remove-Item $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
