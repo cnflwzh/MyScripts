@@ -1,0 +1,76 @@
+﻿怪物猎人：崛起／曙光 等级编辑器 v2.1（无需 Cheat Engine）
+
+功能
+1：只读查看 HR、MR、AR 和各自累计经验。
+2：怪异研究等级设为 AR 300，累计经验 335200。
+3：设置猎人等级 HR，目标范围 9～999。
+4：设置大师等级 MR，目标范围 7～999。
+每次只修改选中的一种等级及对应累计经验，共 8 字节。
+其他两种等级及其经验保持原样。不修改物品、护石或调查任务等级。
+HR/MR 经验同步设为目标等级起点；降低等级也会降低累计经验。
+目标与当前等级相同时不写入，不清空当前等级内的经验进度。
+
+使用步骤
+1. 游戏载入角色，停在离线据点，手动保存并等待保存图标消失。
+2. 解压后双击 Start.cmd。选 2 直接设置 AR 300；选 3/4 输入目标 HR/MR 后直接执行。
+3. 单个 Steam 存档自动使用；只有多个账号时才需选择当前账号。
+4. 脚本自动备份、修改并读回校验，不要求复输当前等级或确认文字。
+5. 完成后在游戏内保存，返回标题并重新载入；需要查看时重新运行选 1。
+使用命令行提供 -TargetRank 时同样直接执行，没有额外确认。
+
+剧情与范围
+必须已解锁经验升级：HR 至少 9；修改 MR 时当前 MR 至少 7；
+修改 AR 时当前 MR 至少 10，且已经解锁怪异研究。
+不支持修改主线阶段的 HR 1～8、MR 1～6。
+不会自动完成紧急任务、主线任务或设置等级上限解锁标志。
+跨越未解锁上限后，游戏可能重新限制等级，仍需完成对应解锁任务。
+修改等级不等于解锁所有任务或奖励，请先完成相应解锁任务。
+
+兼容范围
+Windows x64，PowerShell 5.1/7，Steam 版 16.0.2.0。
+MonsterHunterRise.exe SHA-256 必须为：
+29FA23A9CE24613A9B05CE84F7EBFA3262AAF5053B377B43FD8DFC09071AA7FC
+以完整哈希为准；版本号相同也可能不兼容。安装路径和账号可不同。
+哈希不匹配立即停止，不要删除保护。主机、模拟器及商店版未支持。
+
+备份与恢复
+备份默认位于脚本旁 backups\时间戳目录，每次单独生成。
+包含完整 1446780 目录、sha256-manifest.csv、change-record.json。
+原件复制前、副本、原件复制后三份哈希一致才允许写入。
+备份只包含已保存到磁盘的进度，请先手动保存。
+Start.cmd 显式传入备份目录；直接执行 .ps1 在正文解析脚本路径，
+没有脚本路径时退回当前工作目录并提示。可用 -BackupDirectory 指定。
+恢复时先关闭游戏，另存当前存档，暂时关闭该游戏 Steam 云同步，
+将备份的 1446780\remote\win64_save 完整内容复制回原位置。
+确认恢复后保存退出，再恢复云同步；冲突时选择正确的本地进度。
+脚本不自动恢复存档或操作云同步。
+分享时只发发布 ZIP，不要把自己的 backups 目录一并分享。
+
+命令行
+  .\MHRise-AR300.ps1 -Action Inspect
+  .\MHRise-AR300.ps1 -Action SetAR300
+  .\MHRise-AR300.ps1 -Action SetHR -TargetRank 200
+  .\MHRise-AR300.ps1 -Action SetMR -TargetRank 100
+可另加：
+  -SaveDirectory "D:\Steam\userdata\你的账号数字\1446780" -BackupDirectory "D:\MHRiseBackups"
+保留原脚本文件名以兼容旧快捷方式。不会自动保存、退出或持续锁定等级。
+
+故障提示
+全为 1：先载入角色，标题画面不能修改。
+拒绝访问：游戏和脚本使用相同权限，无需关闭安全软件。
+找不到存档：指定 1446780 文件夹，不要指定 remote 或 win64_save。
+版本不匹配：需重新核对该版本，不能只改哈希绕过。
+启动器 ExecutionPolicy Bypass 仅影响当前进程，不永久修改系统策略。
+
+来源与验证范围
+使用 Windows/.NET OpenProcess、ReadProcessMemory、WriteProcessMemory。
+不需要 CE、驱动、DLL 注入或解密存档。每次只写一组等级与经验。
+偏移参考 Marcus101RR Cheat Table Monster Hunter Rise 1.5.1：
+https://www.nexusmods.com/monsterhunterrise/mods/21
+HR 经验：https://mhrise.com/data/4536.html
+MR 经验：https://macarongamemo.com/entry/mhrsb-mrp
+AR 经验：https://macarongamemo.com/entry/mhrsb-anomaly_research
+包内不包含或执行第三方 CT。
+先前 AR 修改已实机验证，保存重载后仍为 AR 300。
+HR/MR 读取字段曾与状态页匹配；新增写入及剧情上限场景未实机验证。
+本次开发没有为验证而改变用户角色 HR/MR，使用者仍需保存重载验收。
